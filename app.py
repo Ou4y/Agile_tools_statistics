@@ -280,6 +280,7 @@ def add_cors_headers(response):
 
 app.register_blueprint(bp)
 
+# Only run the dev server if not running under gunicorn
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
