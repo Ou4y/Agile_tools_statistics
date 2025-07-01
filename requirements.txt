@@ -3,3 +3,4 @@ pandas==2.2.2
 plotly==5.22.0
 Werkzeug==3.0.3
 python-dotenv
+gunicorn==21.2.0
