@@ -4,3 +4,4 @@ plotly==5.22.0
 Werkzeug==3.0.3
 python-dotenv
 gunicorn
+Flask-SQLAlchemy

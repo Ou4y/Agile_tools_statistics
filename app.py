@@ -5,9 +5,9 @@ import plotly.io as pio
 import os
 from werkzeug.utils import secure_filename
 from functools import lru_cache
-import csv
 from collections import defaultdict
 from datetime import timedelta
+from flask_sqlalchemy import SQLAlchemy
 
 # Load environment variables from .env if present (requires python-dotenv)
 try:
@@ -22,6 +22,11 @@ app.permanent_session_lifetime = timedelta(minutes=1)
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+# Configure SQLAlchemy
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///survey.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
 bp = Blueprint('dashboard', __name__)
 
 SURVEY_CSV = 'survey_answers.csv'
@@ -43,6 +48,18 @@ SURVEY_OPTIONS = [
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 if not ADMIN_PASSWORD:
     raise RuntimeError("ADMIN_PASSWORD environment variable must be set for admin access.")
+
+class SurveyAnswer(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(128), unique=True, nullable=False)
+    q1 = db.Column(db.String(128), nullable=False)
+    q2 = db.Column(db.String(128), nullable=False)
+    q3 = db.Column(db.String(128), nullable=False)
+    q4 = db.Column(db.String(128), nullable=False)
+
+# Initialize DB (create tables if not exist)
+with app.app_context():
+    db.create_all()
 
 @lru_cache(maxsize=10)
 def parse_and_metrics(filepath):
@@ -68,20 +85,18 @@ def parse_and_metrics(filepath):
 
 def read_survey_answers():
     answers = {}
-    if os.path.exists(SURVEY_PATH):
-        with open(SURVEY_PATH, newline='') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                answers[row['key']] = [row['q1'], row['q2'], row['q3'], row['q4']]
+    for row in SurveyAnswer.query.all():
+        answers[row.key] = [row.q1, row.q2, row.q3, row.q4]
     return answers
 
 def append_survey_answer(key, q1, q2, q3, q4):
-    file_exists = os.path.exists(SURVEY_PATH)
-    with open(SURVEY_PATH, 'a', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['key','q1','q2','q3','q4'])
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow({'key': key, 'q1': q1, 'q2': q2, 'q3': q3, 'q4': q4})
+    ans = SurveyAnswer.query.filter_by(key=key).first()
+    if ans:
+        ans.q1, ans.q2, ans.q3, ans.q4 = q1, q2, q3, q4
+    else:
+        ans = SurveyAnswer(key=key, q1=q1, q2=q2, q3=q3, q4=q4)
+        db.session.add(ans)
+    db.session.commit()
 
 @bp.route('/', methods=['GET','POST'])
 def upload():
@@ -231,43 +246,33 @@ def survey_answers_view():
         else:
             return render_template_string('<div class="container py-4"><h2>Admin Login</h2><form method="post"><input type="password" name="admin_password" class="form-control mb-2" placeholder="Admin Password" required><button class="btn btn-primary" type="submit">Login</button></form></div>')
     answers = []
-    if os.path.exists(SURVEY_PATH):
-        with open(SURVEY_PATH, newline='') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                answers.append(row)
+    for row in SurveyAnswer.query.all():
+        answers.append({
+            'key': row.key,
+            'q1': row.q1,
+            'q2': row.q2,
+            'q3': row.q3,
+            'q4': row.q4
+        })
     message = None
     if request.method == 'POST' and 'action' in request.form:
         action = request.form.get('action')
         key = request.form.get('key')
         if action == 'delete' and key:
-            # Remove only the first matching entry and rewrite file
-            deleted = False
-            new_answers = []
-            for row in answers:
-                if not deleted and row['key'] == key:
-                    deleted = True
-                    continue  # skip this row (delete only first occurrence)
-                new_answers.append(row)
-            answers = new_answers
-            with open(SURVEY_PATH, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=['key','q1','q2','q3','q4'])
-                writer.writeheader()
-                writer.writerows(answers)
-            message = f"Deleted survey for {key}."
+            ans = SurveyAnswer.query.filter_by(key=key).first()
+            if ans:
+                db.session.delete(ans)
+                db.session.commit()
+                message = f"Deleted survey for {key}."
         elif action == 'edit' and key:
-            # Update entry
-            for row in answers:
-                if row['key'] == key:
-                    row['q1'] = request.form.get('q1')
-                    row['q2'] = request.form.get('q2')
-                    row['q3'] = request.form.get('q3')
-                    row['q4'] = request.form.get('q4')
-            with open(SURVEY_PATH, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=['key','q1','q2','q3','q4'])
-                writer.writeheader()
-                writer.writerows(answers)
-            message = f"Edited survey for {key}."
+            ans = SurveyAnswer.query.filter_by(key=key).first()
+            if ans:
+                ans.q1 = request.form.get('q1')
+                ans.q2 = request.form.get('q2')
+                ans.q3 = request.form.get('q3')
+                ans.q4 = request.form.get('q4')
+                db.session.commit()
+                message = f"Edited survey for {key}."
     return render_template('survey_answers.html', answers=answers, survey_questions=SURVEY_QUESTIONS, survey_options=SURVEY_OPTIONS, message=message)
 
 # Optionally, add CORS headers for AJAX POSTs from mobile/public
