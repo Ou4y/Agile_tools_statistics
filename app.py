@@ -280,6 +280,10 @@ def add_cors_headers(response):
 
 app.register_blueprint(bp)
 
+@app.route('/health')
+def health():
+    return 'OK', 200
+
 # Only run the dev server if not running under gunicorn
 if __name__ == '__main__':
     port = int(os.environ.get('PORT',5050))
